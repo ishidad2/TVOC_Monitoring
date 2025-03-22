@@ -10,6 +10,7 @@ SensorManager::SensorManager() :
   stable_condition_start(0),
   last_auto_check_time(0),
   last_read_time(0),
+  last_baseline_save_time(0),
   demo_phase(0.0) {
 }
 
@@ -21,14 +22,14 @@ bool SensorManager::init(Adafruit_SGP30* sensor, Preferences* prefs) {
     return false;
   }
 
-  // 保存されたベースラインを読み込む
+  // ベースラインの読み込みを試みる
   loadBaseline(sgp, preferences);
   return true;
 }
 
 void SensorManager::update(bool sensor_connected) {
   // 1秒ごとにセンサーを更新
-  if (millis() - last_read_time < 1000) {
+  if (millis() - last_read_time < SENSOR_UPDATE_INTERVAL) {
     return;
   }
 
@@ -42,6 +43,9 @@ void SensorManager::update(bool sensor_connected) {
     }
     tvoc_value = sgp->TVOC;
     eco2_value = sgp->eCO2;
+
+    // 定期的なベースライン保存処理
+    checkPeriodicBaselineSave();
   } else {
     // デモデータの生成
     generateDemoData();
@@ -62,18 +66,18 @@ void SensorManager::generateDemoData() {
 bool SensorManager::saveBaseline(Adafruit_SGP30* sensor, Preferences* prefs) {
   uint16_t eco2_base, tvoc_base;
 
-  if (sensor->getIAQBaseline(&eco2_base, &tvoc_base)) {
-    prefs->begin("sgp30", false);
-    prefs->putUShort("eco2_base", eco2_base);
-    prefs->putUShort("tvoc_base", tvoc_base);
-    prefs->end();
-
-    Serial.println("Baseline saved: eCO2=" + String(eco2_base) + ", TVOC=" + String(tvoc_base));
-    return true;
-  } else {
+  if (!sensor->getIAQBaseline(&eco2_base, &tvoc_base)) {
     Serial.println("Failed to get baseline readings");
     return false;
   }
+
+  prefs->begin("sgp30", false);
+  prefs->putUShort("eco2_base", eco2_base);
+  prefs->putUShort("tvoc_base", tvoc_base);
+  prefs->end();
+
+  Serial.println("Baseline saved: eCO2=" + String(eco2_base) + ", TVOC=" + String(tvoc_base));
+  return true;
 }
 
 bool SensorManager::loadBaseline(Adafruit_SGP30* sensor, Preferences* prefs) {
@@ -82,27 +86,28 @@ bool SensorManager::loadBaseline(Adafruit_SGP30* sensor, Preferences* prefs) {
   uint16_t tvoc_base = prefs->getUShort("tvoc_base", 0);
   prefs->end();
 
-  if (eco2_base != 0 && tvoc_base != 0) {
-    if (sensor->setIAQBaseline(eco2_base, tvoc_base)) {
-      Serial.println("Baseline loaded: eCO2=" + String(eco2_base) + ", TVOC=" + String(tvoc_base));
-      return true;
-    } else {
-      Serial.println("Failed to set baseline values");
-      return false;
-    }
-  } else {
+  if (eco2_base == 0 || tvoc_base == 0) {
     Serial.println("No valid baseline saved");
     return false;
   }
+
+  if (!sensor->setIAQBaseline(eco2_base, tvoc_base)) {
+    Serial.println("Failed to set baseline values");
+    return false;
+  }
+
+  Serial.println("Baseline loaded: eCO2=" + String(eco2_base) + ", TVOC=" + String(tvoc_base));
+  return true;
 }
 
 bool SensorManager::resetBaseline(Adafruit_SGP30* sensor) {
-  if (sensor->IAQinit()) {
-    condition_flag = false;
-    Serial.println("Baseline reset");
-    return true;
+  if (!sensor->IAQinit()) {
+    return false;
   }
-  return false;
+
+  condition_flag = false;
+  Serial.println("Baseline reset");
+  return true;
 }
 
 bool SensorManager::getBaseline(Adafruit_SGP30* sensor, uint16_t* eco2_base, uint16_t* tvoc_base) {
@@ -110,7 +115,7 @@ bool SensorManager::getBaseline(Adafruit_SGP30* sensor, uint16_t* eco2_base, uin
 }
 
 void SensorManager::checkAutoBaseline() {
-  // 10秒ごとに自動ベースラインチェック
+  // AUTO_CHECK_INTERVALごとに自動ベースラインチェック
   if (millis() - last_auto_check_time < AUTO_CHECK_INTERVAL) {
     return;
   }
@@ -123,9 +128,25 @@ void SensorManager::checkAutoBaseline() {
   }
 }
 
+void SensorManager::checkPeriodicBaselineSave() {
+  // 12時間ごとに定期保存
+  if (millis() - last_baseline_save_time >= BASELINE_AUTO_SAVE_INTERVAL) {
+    last_baseline_save_time = millis();
+    
+    // ベースラインを保存
+    if (saveBaseline(sgp, preferences)) {
+      Serial.println("Periodic baseline save completed");
+    } else {
+      Serial.println("Periodic baseline save failed");
+    }
+  }
+}
+
 bool SensorManager::isGoodConditionForBaseline(uint16_t eco2_value, uint16_t tvoc_value) {
   // eCO2が400-500ppmの範囲内かつTVOCが100ppb以下
-  if (eco2_value >= ECO2_MIN && eco2_value <= ECO2_MAX && tvoc_value <= TVOC_MAX) {
+  bool isCleanNow = (eco2_value >= ECO2_MIN && eco2_value <= ECO2_MAX && tvoc_value <= TVOC_MAX);
+
+  if (isCleanNow) {
     if (!condition_flag) {
       stable_condition_start = millis();
       condition_flag = true;

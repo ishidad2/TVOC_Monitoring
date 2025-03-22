@@ -20,6 +20,7 @@ public:
   bool resetBaseline(Adafruit_SGP30* sensor);
   bool getBaseline(Adafruit_SGP30* sensor, uint16_t* eco2_base, uint16_t* tvoc_base);
   void checkAutoBaseline();
+  void checkPeriodicBaselineSave();
 
   // センサー値取得
   uint16_t getTVOC() const { return tvoc_value; }
@@ -37,6 +38,8 @@ private:
   static const uint16_t TVOC_MAX = 100;      // TVOC最大値 (ppb)
   static const unsigned long STABLE_TIME = 600000; // 条件が満たされるべき時間 (ms) - 10分
   static const unsigned long AUTO_CHECK_INTERVAL = 10000; // 自動チェック間隔 (ms)
+  static const unsigned long SENSOR_UPDATE_INTERVAL = 1000; // センサー更新間隔 (ms)
+  static const unsigned long BASELINE_AUTO_SAVE_INTERVAL = 43200000; // ベースライン自動保存間隔 (ms) - 12時間
 
   // センサー関連
   Adafruit_SGP30* sgp;
@@ -51,6 +54,7 @@ private:
   unsigned long stable_condition_start;
   unsigned long last_auto_check_time;
   unsigned long last_read_time;
+  unsigned long last_baseline_save_time;
 
   // デモ用
   float demo_phase;
